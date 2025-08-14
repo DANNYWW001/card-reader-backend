@@ -9,7 +9,7 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({ origin: "https://card-reader-backend-ls73.onrender.com" }));
 app.use(bodyParser.json());
 
 // MongoDB Connection
