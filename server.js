@@ -9,7 +9,11 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors({ origin: "https://localhost:5173" }));
+app.use(
+  cors({
+    origin: "https://card-reader-git-main-dannywwaves-projects.vercel.app", // Replace with your Vercel URL
+  })
+);
 app.use(bodyParser.json());
 
 // MongoDB Connection
