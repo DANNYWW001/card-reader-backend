@@ -11,7 +11,7 @@ const port = process.env.PORT || 3001;
 // Middleware
 app.use(
   cors({
-    origin: "https://card-reader-git-main-dannywwaves-projects.vercel.app", // Replace with your Vercel URL
+    origin: "https://card-reader-mu.vercel.app",
   })
 );
 app.use(bodyParser.json());
@@ -69,45 +69,24 @@ app.post("/validate-digits", (req, res) => {
 });
 
 // Endpoint for Step III: Activate card
-app.post("/activate", async (req, res) => {
-  const { cardType, lastSixDigits, holderName, currency, dailyLimit, accept } =
-    req.body;
-  console.log("Activating card with data:", req.body);
+// ... (previous Mongoose and middleware setup remains unchanged)
+
+app.post('/activate', async (req, res) => {
+  const { cardType, lastSixDigits, holderName, currency, dailyLimit, accept } = req.body;
+  console.log('Activating card with data:', req.body);
 
   try {
-    if (
-      !cardType ||
-      !lastSixDigits ||
-      !holderName ||
-      !currency ||
-      !dailyLimit ||
-      !accept
-    ) {
-      return res.status(400).json({ message: "All fields are required." });
+    if (!cardType || !lastSixDigits || !holderName || !currency || !dailyLimit || !accept) {
+      return res.status(400).json({ message: 'All fields are required.' });
     }
     if (lastSixDigits.length !== 6 || !/^\d+$/.test(lastSixDigits)) {
-      return res.status(400).json({ message: "Invalid last 6 digits." });
+      return res.status(400).json({ message: 'Invalid last 6 digits.' });
     }
     if (parseInt(dailyLimit) > 5000 || parseInt(dailyLimit) < 0) {
-      return res
-        .status(400)
-        .json({ message: "Daily limit must be between 0 and 5000." });
+      return res.status(400).json({ message: 'Daily limit must be between 0 and 5000.' });
     }
-    if (
-      ![
-        "USD",
-        "EUR",
-        "GBP",
-        "JPY",
-        "CAD",
-        "AUD",
-        "CHF",
-        "CNY",
-        "INR",
-        "ZAR",
-      ].includes(currency)
-    ) {
-      return res.status(400).json({ message: "Unsupported currency." });
+    if (!['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'INR', 'ZAR'].includes(currency)) {
+      return res.status(400).json({ message: 'Unsupported currency.' });
     }
 
     if (accept) {
@@ -120,21 +99,21 @@ app.post("/activate", async (req, res) => {
         accept,
       });
       await newActivation.save();
+      console.log('Activation saved to DB'); // Add this line
       return res.status(200).json({
-        message: "Card activated successfully",
-        data: { cardType, lastSixDigits, holderName, currency, dailyLimit },
+        message: 'Card activated successfully',
+        data: { cardType, lastSixDigits, holderName, currency, dailyLimit }
       });
     } else {
-      return res
-        .status(400)
-        .json({ message: "Acceptance of terms is required." });
+      return res.status(400).json({ message: 'Acceptance of terms is required.' });
     }
   } catch (error) {
-    console.error("Server error in /activate:", error);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error('Server error in /activate:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 });
 
+// ... (rest of the file, including app.listen, remains unchanged)
 // Start the server
 app.listen(port, () => {
   console.log(`Backend running at http://localhost:${port}`);
