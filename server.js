@@ -11,7 +11,7 @@ const port = process.env.PORT || 3001;
 // Middleware
 app.use(
   cors({
-    origin: "https://card-reader-mu.vercel.app",
+    origin: "https://card-reader-git-main-dannywwaves-projects.vercel.app/", // Replace with your frontend URL
   })
 );
 app.use(bodyParser.json());
