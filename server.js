@@ -29,6 +29,7 @@ const connectWithRetry = () => {
       heartbeatFrequencyMS: 10000,
       retryWrites: true,
       w: "majority",
+      autoIndex: true, // Ensure indexes are created
     })
     .then(() => {
       console.log("Connected to MongoDB successfully");
@@ -39,7 +40,7 @@ const connectWithRetry = () => {
         name: err.name,
         reason: err.reason,
         code: err.code,
-        stack: err.stack, // Add stack trace for more details
+        stack: err.stack,
       });
       console.log("Retrying connection in 5 seconds...");
       setTimeout(connectWithRetry, 5000); // Retry after 5 seconds
@@ -141,10 +142,10 @@ app.post("/activate", async (req, res) => {
     }
 
     const limit = parseInt(dailyLimit);
-    if (limit > 5000 || limit < 0) {
+    if (isNaN(limit) || limit > 5000 || limit < 0) {
       return res
         .status(400)
-        .json({ message: "Daily limit must be between 0 and 5000." });
+        .json({ message: "Daily limit must be a number between 0 and 5000." });
     }
 
     const validCurrencies = [
@@ -192,6 +193,7 @@ app.post("/activate", async (req, res) => {
     console.error("Server error in /activate:", error);
     return res.status(500).json({
       message: "An unexpected error occurred. Please try again later.",
+      error: error.message, // Include error details for debugging
     });
   }
 });
