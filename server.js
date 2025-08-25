@@ -10,7 +10,8 @@ app.use(express.json());
 // Configure CORS to allow all origins
 app.use(cors());
 
-const PORT = process.env.PORT || 3001;
+// Use only process.env.PORT as required by Render
+const PORT = process.env.PORT;
 
 // MongoDB Connection with enhanced debugging and corrected timeout
 const mongoUri = process.env.MONGODB_URI;
