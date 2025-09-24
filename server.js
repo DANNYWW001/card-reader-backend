@@ -259,7 +259,7 @@ app.post("/admin/update-fees", async (req, res) => {
 // Fetch payments (only after admin update)
 app.get("/api/payments", async (req, res) => {
   try {
-    const payments = await Payment.find().sort({ updatedAt: -1 }).limit(1); // Get latest update
+    const payments = await Payment.find().sort({ updatedAt: -1 }).limit(1);
     if (payments.length === 0) {
       return res
         .status(404)
