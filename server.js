@@ -1,6 +1,8 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const app = express();
@@ -8,16 +10,10 @@ app.use(express.json());
 app.use(cors());
 
 const PORT = process.env.PORT || 3001;
+const mongoUri = process.env.MONGODB_URI;
+const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
 // MongoDB Connection
-const mongoUri = process.env.MONGODB_URI;
-if (!mongoUri) {
-  console.error(
-    "MONGODB_URI is not defined in .env. Please set it in your .env file."
-  );
-  process.exit(1);
-}
-
 mongoose
   .connect(mongoUri, {
     serverSelectionTimeoutMS: 30000,
@@ -39,16 +35,7 @@ mongoose.connection.on("reconnected", () =>
   console.log("🔄 MongoDB reconnected successfully")
 );
 
-process.on("SIGINT", () => {
-  mongoose.connection.close(() => {
-    console.log("🔌 MongoDB connection closed due to app termination");
-    process.exit(0);
-  });
-});
-
 // =================== SCHEMAS ===================
-
-// Payment Schema
 const paymentSchema = new mongoose.Schema({
   label: { type: String, required: true },
   price: { type: Number, required: true },
@@ -56,7 +43,6 @@ const paymentSchema = new mongoose.Schema({
 });
 const Payment = mongoose.model("Payment", paymentSchema);
 
-// Activation Schema
 const activationSchema = new mongoose.Schema({
   cardType: { type: String, required: true },
   lastSixDigits: { type: String, required: true },
@@ -70,10 +56,9 @@ const activationSchema = new mongoose.Schema({
 });
 const Activation = mongoose.model("Activation", activationSchema);
 
-// Admin Schema
 const adminSchema = new mongoose.Schema({
   username: { type: String, required: true },
-  password: { type: String, required: true },
+  password: { type: String, required: true }, // hashed
   ipAddress: { type: String },
 });
 const Admin = mongoose.model("Admin", adminSchema);
@@ -86,21 +71,49 @@ const getIp = (req, res, next) => {
 };
 app.use(getIp);
 
+// JWT middleware
+const verifyAdmin = (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader)
+    return res.status(403).json({ message: "No token provided" });
+
+  const token = authHeader.split(" ")[1];
+  if (!token)
+    return res.status(403).json({ message: "Malformed token header" });
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(401).json({ message: "Unauthorized" });
+    req.admin = decoded;
+    next();
+  });
+};
+
 // =================== ROUTES ===================
 
-// Admin Login
+// Admin Login (✅ FIXED with real JWT signing)
 app.post("/admin/login", async (req, res) => {
   const { username, password } = req.body;
   try {
-    const admin = await Admin.findOne({ username, password });
-    if (admin) {
-      admin.ipAddress = req.ipAddress;
-      await admin.save();
-      return res
-        .status(200)
-        .json({ message: "Login successful", token: "admin-token" });
+    const admin = await Admin.findOne({ username });
+    if (!admin) {
+      return res.status(401).json({ message: "Invalid credentials" });
     }
-    return res.status(401).json({ message: "Invalid credentials" });
+
+    const isMatch = await bcrypt.compare(password, admin.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    admin.ipAddress = req.ipAddress;
+    await admin.save();
+
+    const token = jwt.sign(
+      { id: admin._id, username: admin.username },
+      JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    return res.status(200).json({ message: "Login successful", token });
   } catch (error) {
     console.error("Login error:", error);
     return res.status(500).json({ message: "Server error" });
@@ -215,8 +228,8 @@ app.post("/activate", async (req, res) => {
   }
 });
 
-// Admin update fees
-app.post("/admin/update-fees", async (req, res) => {
+// Admin update fees (protected)
+app.post("/admin/update-fees", verifyAdmin, async (req, res) => {
   const { vat, cardActivation, cardMaintenance, secureConnection } = req.body;
   const adminIp = req.ipAddress;
 
@@ -257,7 +270,6 @@ app.get("/api/payments", async (req, res) => {
   try {
     let payments = await Payment.find();
 
-    // If no payments exist yet, create defaults
     if (payments.length === 0) {
       payments = [
         { label: "VAT (value added tax)", price: 0 },
@@ -278,17 +290,27 @@ app.get("/api/payments", async (req, res) => {
   }
 });
 
-// =================== SERVER START ===================
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
-
 // =================== INITIAL ADMIN SETUP ===================
 async function initAdmin() {
   const adminExists = await Admin.countDocuments();
   if (adminExists === 0) {
-    await Admin.create({ username: "admin", password: "admin123" });
-    console.log("👤 Initial admin created: username=admin, password=admin123");
+    const defaultUsername = process.env.ADMIN_USERNAME || "admin";
+    const defaultPassword = process.env.ADMIN_PASSWORD || "admin123";
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+    await Admin.create({
+      username: defaultUsername,
+      password: hashedPassword,
+    });
+
+    console.log(
+      `👤 Initial admin created: username=${defaultUsername}, password=${defaultPassword} (hashed in DB)`
+    );
   }
 }
 initAdmin();
+
+// =================== SERVER START ===================
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
